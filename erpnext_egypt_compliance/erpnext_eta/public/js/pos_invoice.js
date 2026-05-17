@@ -73,7 +73,7 @@ frappe.ui.form.on('POS Invoice', {
 				console.log(r.message)
 				if (!r.exc) {
 					frappe.show_alert("E-Receipt Status Updated");
-					cur_frm.reload_doc();
+					frm.reload_doc();
 				}
 			}
 		})
