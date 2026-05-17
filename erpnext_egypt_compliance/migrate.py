@@ -25,5 +25,6 @@ def after_migrate():
 		frappe.db.set_value("Custom Field", field_name, "module", app_title, update_modified=False)
 
 	if fields_to_update:
-		frappe.db.commit()
+		# Migration hook — explicit commit so subsequent migrations see the backfilled module field.
+		frappe.db.commit()  # nosemgrep: frappe-manual-commit
 		print(f"Set module for {len(fields_to_update)} custom fields")

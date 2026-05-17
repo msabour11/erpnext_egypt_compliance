@@ -14,5 +14,6 @@ def after_uninstall():
 	for field_name in custom_fields:
 		frappe.delete_doc("Custom Field", field_name, force=True, ignore_missing=True)
 
-	frappe.db.commit()
+	# Uninstall hook — explicit commit so cleanup persists even if a later hook fails.
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit
 	print(f"Cleaned up {len(custom_fields)} remaining custom fields")

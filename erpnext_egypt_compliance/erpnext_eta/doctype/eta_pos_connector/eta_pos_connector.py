@@ -94,7 +94,8 @@ class ETAPOSConnector(Document):
 		self.access_token = eta_response.get("access_token")
 		self.expires_in = frappe.utils.add_to_date(now(), seconds=eta_response.get("expires_in"))
 		self.save(ignore_permissions=True)
-		frappe.db.commit()
+		# Persist the refreshed token immediately so concurrent requests reuse it instead of hitting the IDP again.
+		frappe.db.commit()  # nosemgrep: frappe-manual-commit
 		return eta_response.get("access_token")
 			
   
