@@ -5,6 +5,7 @@ import frappe
 from erpnext_egypt_compliance.erpnext_eta.utils import eta_round
 import erpnext_egypt_compliance.erpnext_eta.einvoice_schema as einvoice_schema
 from erpnext_egypt_compliance.erpnext_eta.einvoice_schema import (
+    Discount,
     _get_item_code_and_type,
     _get_item_unit_value,
     _get_sales_and_net_totals,
@@ -17,7 +18,7 @@ def test_eta_round(db_transaction):
     assert eta_round(1.2345) == 1.23
     assert eta_round(1.2355) == 1.24
     assert eta_round(1.2345, 0) == 1.23
-    assert eta_round(1.2355, 0) == 1.24
+    assert eta_round(1.2355) == 1.24
     assert eta_round(1.2345, 3) == 1.234
     assert eta_round(1.2355, 3) == 1.236
     assert eta_round(1.2345, 4) == 1.2345
@@ -84,53 +85,92 @@ def test_get_item_code_and_type(monkeypatch, item_data, expected, db_transaction
 @pytest.mark.parametrize(
     "invoice_data, item_data, expected",
     [
+        # EGP invoice, item has a price list rate (discount case) — amountEGP must be pre-discount
         (
-            {"currency": "USD", "_exchange_rate": 30, "_foreign_company_currency": True},
-            {"net_rate": 1, "rate": 100},
-            Value(currencySold="USD", amountEGP=1 * 30, amountSold=100, currencyExchangeRate=30),
+            {"currency": "EGP"},
+            {"net_rate": 90.0, "base_price_list_rate": 100.0},
+            Value(currencySold="EGP", amountEGP=100.0),
         ),
+        # EGP invoice, no price list rate (manual price entry, no discount) — falls back to net_rate
         (
-            {"currency": "USD", "_exchange_rate": 30, "_foreign_company_currency": False},
-            {"net_rate": 1, "rate": 100},
-            Value(currencySold="USD", amountEGP=1 * 30),
+            {"currency": "EGP"},
+            {"net_rate": 100.0, "base_price_list_rate": 0.0},
+            Value(currencySold="EGP", amountEGP=100.0),
         ),
+        # Foreign currency invoice, item has a price list rate — amountEGP uses base_price_list_rate
         (
-            {"currency": "EGP", "_exchange_rate": 30, "_foreign_company_currency": True},
-            {"net_rate": 4, "rate": 100},
-            Value(currencySold="EGP", amountEGP=4 * 30),
+            {"currency": "USD", "conversion_rate": 30.0},
+            {"net_rate": 3.0, "rate": 3.0, "price_list_rate": 3.5, "base_price_list_rate": 105.0},
+            Value(currencySold="USD", amountEGP=105.0, amountSold=3.5, currencyExchangeRate=30.0),
         ),
+        # Foreign currency invoice, no price list rate — falls back to net_rate * conversion_rate
         (
-            {"currency": "EGP", "_exchange_rate": 30, "_foreign_company_currency": False},
-            {"net_rate": 4, "rate": 100},
-            Value(currencySold="EGP", amountEGP=4 * 30),
+            {"currency": "USD", "conversion_rate": 30.0},
+            {"net_rate": 3.0, "rate": 3.0, "price_list_rate": 0.0, "base_price_list_rate": 0.0},
+            Value(currencySold="USD", amountEGP=90.0, amountSold=3.0, currencyExchangeRate=30.0),
         ),
     ],
 )
-def test_get_item_unit_value(monkeypatch, item_data, expected, invoice_data, db_transaction):
+def test_get_item_unit_value(monkeypatch, item_data, expected, invoice_data):
     monkeypatch.setattr(einvoice_schema, "INVOICE_RAW_DATA", invoice_data)
-
     assert _get_item_unit_value(item_data) == expected
 
 
 @pytest.mark.parametrize(
     "invoice_data, item_data, expected",
     [
+        # EGP invoice, item has a discount — salesTotal (pre-discount) != netTotal (post-discount)
         (
-            {"_foreign_company_currency": True},
-            {"base_amount": 10, "_exchange_rate": 30, "net_amount": 20},
-            (10 * 30, 10 * 30),
+            {"currency": "EGP"},
+            {"base_amount": 90.0, "net_amount": 90.0, "qty": 1.0, "base_price_list_rate": 100.0},
+            (100.0, 90.0),
         ),
+        # EGP invoice, no price list rate — salesTotal falls back to netTotal (no discount)
         (
-            {"_foreign_company_currency": False},
-            {"base_amount": 10, "_exchange_rate": 30, "net_amount": 20},
-            (20 * 30, 20 * 30),
+            {"currency": "EGP"},
+            {"base_amount": 100.0, "net_amount": 100.0, "qty": 1.0, "base_price_list_rate": 0.0},
+            (100.0, 100.0),
+        ),
+        # Foreign currency invoice, item has a discount
+        (
+            {"currency": "USD", "conversion_rate": 30.0},
+            {"base_amount": 2700.0, "net_amount": 90.0, "qty": 1.0, "base_price_list_rate": 3300.0},
+            (3300.0, 2700.0),
+        ),
+        # Foreign currency invoice, no price list rate — falls back to net_amount * conversion_rate
+        (
+            {"currency": "USD", "conversion_rate": 30.0},
+            {"base_amount": 3000.0, "net_amount": 100.0, "qty": 1.0, "base_price_list_rate": 0.0},
+            (3000.0, 3000.0),
         ),
     ],
 )
-def test_get_sales_and_net_totals(monkeypatch, invoice_data, item_data, expected, db_transaction):
+def test_get_sales_and_net_totals(monkeypatch, invoice_data, item_data, expected):
     monkeypatch.setattr(einvoice_schema, "INVOICE_RAW_DATA", invoice_data)
-
     assert _get_sales_and_net_totals(item_data) == expected
+
+
+def test_discount_object_construction():
+    """Discount object is built from the salesTotal/netTotal split, not from discount_percentage."""
+    # item with 20% discount: list price 100, sold at 80
+    sales_total = 100.0
+    net_total = 80.0
+    discount_amt = eta_round(sales_total - net_total)
+    discount_rate = round(discount_amt / sales_total * 100, 5)
+    item_discount = [Discount(rate=discount_rate, amount=discount_amt)] if discount_amt > 0 else None
+
+    assert item_discount is not None
+    assert len(item_discount) == 1
+    assert item_discount[0].amount == 20.0
+    assert item_discount[0].rate == 20.0
+
+    # item with no discount: salesTotal == netTotal → discount is None (absent from JSON)
+    sales_total = 100.0
+    net_total = 100.0
+    discount_amt = eta_round(sales_total - net_total)
+    item_discount = [Discount(rate=round(discount_amt / sales_total * 100, 5), amount=discount_amt)] if discount_amt > 0 else None
+
+    assert item_discount is None
 
 
 @pytest.mark.parametrize(

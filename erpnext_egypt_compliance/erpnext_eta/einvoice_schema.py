@@ -369,7 +369,7 @@ def get_invoice_asjson(docname: str, as_dict: bool=False):
         totalSalesAmount=total_sales_amount,
         netAmount=net_amount,
         totalAmount=total_amount,
-        totalItemsDiscountAmount=0.0,
+        totalItemsDiscountAmount=total_discount_amount,
         taxTotals=tax_totals,
         signatures=signatures,
     )
@@ -570,39 +570,41 @@ def _get_sales_and_net_totals(_item_data: Dict):
     item_base_amount = _item_data.get("base_amount")
     item_exchange_rate = INVOICE_RAW_DATA.get("conversion_rate") or _item_data.get("_exchange_rate") or 1
     item_net_amount = _item_data.get("net_amount")
+    base_list_rate = _item_data.get("base_price_list_rate") or 0.0
+    qty = _item_data.get("qty") or 0.0
 
     if INVOICE_RAW_DATA.get("currency") == "EGP":
-        _sales_total = _net_total = item_base_amount
+        _net_total = item_base_amount
+        _sales_total = (base_list_rate * qty) if base_list_rate else _net_total
     else:
-        _sales_total = _net_total = item_net_amount * item_exchange_rate
+        _net_total = item_net_amount * item_exchange_rate
+        _sales_total = (base_list_rate * qty) if base_list_rate else _net_total
 
     return _sales_total, _net_total
 
 
 def _get_item_unit_value(_item_data: Dict):
     """Get the item unit value."""
+    base_list_rate = _item_data.get("base_price_list_rate") or 0.0
 
     if INVOICE_RAW_DATA.get("currency") == "EGP":
         return Value(
             currencySold="EGP",
-            amountEGP=_item_data.get("net_rate"),
+            amountEGP=base_list_rate if base_list_rate else _item_data.get("net_rate"),
         )
-    
+
     else:
         currency_sold = INVOICE_RAW_DATA.get("currency")
         currency_exchange_rate = _exchange_rate = INVOICE_RAW_DATA.get("conversion_rate")
-        amount_egp = _unit_price = _item_data.get("net_rate") * (_exchange_rate or 1)
-        
-
-        amount_sold = (
-            _item_data.get("rate")
-        )
+        list_rate = _item_data.get("price_list_rate") or 0.0
+        amount_egp = base_list_rate if base_list_rate else (_item_data.get("net_rate") * (_exchange_rate or 1))
+        amount_sold = list_rate if list_rate else _item_data.get("rate")
 
         return Value(
             currencySold=currency_sold,
             amountEGP=amount_egp,
-            amountSold = amount_sold,
-            currencyExchangeRate = currency_exchange_rate
+            amountSold=amount_sold,
+            currencyExchangeRate=currency_exchange_rate
         )
 
 def _get_item_code_and_type(_item_data: Dict):
@@ -630,8 +632,12 @@ def _get_item_data(_item_data: Dict):
     sales_total, net_total = _get_sales_and_net_totals(_item_data)
     taxable_items = _get_item_taxable_items(_item_data, net_total)
     item_total = _get_item_total(net_total, taxable_items)
-    # TODO:
-    item_discount = None
+    discount_amt = eta_round(sales_total - net_total)
+    if discount_amt > 0:
+        discount_rate = round(discount_amt / sales_total * 100, 5)
+        item_discount = [Discount(rate=discount_rate, amount=discount_amt)]
+    else:
+        item_discount = None
 
     return {
         "description": _item_data.get("item_name"),
