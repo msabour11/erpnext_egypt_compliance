@@ -9,6 +9,7 @@ from erpnext_egypt_compliance.erpnext_eta.einvoice_schema import (
     _get_item_code_and_type,
     _get_item_unit_value,
     _get_sales_and_net_totals,
+    _resolve_show_discount,
     get_net_total_amount,
     Value,
 )
@@ -202,3 +203,75 @@ def test_get_net_total_amount(monkeypatch, invoice_data, expected, db_transactio
     monkeypatch.setattr(einvoice_schema, "INVOICE_RAW_DATA", invoice_data)
 
     assert get_net_total_amount() == expected
+
+
+@pytest.mark.parametrize(
+    "invoice_data, item_data, expected",
+    [
+        # EGP invoice with a price list rate, but discount OFF — salesTotal collapses to netTotal
+        (
+            {"currency": "EGP"},
+            {"base_amount": 90.0, "net_amount": 90.0, "qty": 1.0, "base_price_list_rate": 100.0},
+            (90.0, 90.0),
+        ),
+        # Foreign currency invoice with a price list rate, discount OFF — salesTotal collapses to netTotal
+        (
+            {"currency": "USD", "conversion_rate": 30.0},
+            {"base_amount": 2700.0, "net_amount": 90.0, "qty": 1.0, "base_price_list_rate": 3300.0},
+            (2700.0, 2700.0),
+        ),
+    ],
+)
+def test_get_sales_and_net_totals_discount_off(monkeypatch, invoice_data, item_data, expected):
+    """When SHOW_DISCOUNT is False, salesTotal == netTotal regardless of the price list rate."""
+    monkeypatch.setattr(einvoice_schema, "INVOICE_RAW_DATA", invoice_data)
+    monkeypatch.setattr(einvoice_schema, "SHOW_DISCOUNT", False)
+    assert _get_sales_and_net_totals(item_data) == expected
+
+
+@pytest.mark.parametrize(
+    "invoice_data, item_data, expected",
+    [
+        # EGP invoice, discount OFF — amountEGP falls back to net_rate even though a price list rate exists
+        (
+            {"currency": "EGP"},
+            {"net_rate": 90.0, "base_price_list_rate": 100.0},
+            Value(currencySold="EGP", amountEGP=90.0),
+        ),
+        # Foreign currency invoice, discount OFF — amountEGP uses net_rate * rate, amountSold uses rate
+        (
+            {"currency": "USD", "conversion_rate": 30.0},
+            {"net_rate": 3.0, "rate": 3.0, "price_list_rate": 3.5, "base_price_list_rate": 105.0},
+            Value(currencySold="USD", amountEGP=90.0, amountSold=3.0, currencyExchangeRate=30.0),
+        ),
+    ],
+)
+def test_get_item_unit_value_discount_off(monkeypatch, invoice_data, item_data, expected):
+    """When SHOW_DISCOUNT is False, the price list rate is ignored (net_rate / rate used instead)."""
+    monkeypatch.setattr(einvoice_schema, "INVOICE_RAW_DATA", invoice_data)
+    monkeypatch.setattr(einvoice_schema, "SHOW_DISCOUNT", False)
+    assert _get_item_unit_value(item_data) == expected
+
+
+@pytest.mark.parametrize(
+    "company_flag, price_list_flag, selling_price_list, expected",
+    [
+        # Company ON, price list OFF → company default applies → shown
+        (1, 0, "Wholesale", True),
+        # Company OFF, price list ON → price list override turns it on
+        (0, 1, "Retail", True),
+        # Company OFF, price list OFF → not shown
+        (0, 0, "Wholesale", False),
+        # Company ON, price list ON → shown
+        (1, 1, "Retail", True),
+        # Company ON, invoice has no selling price list → company default applies → shown
+        (1, 0, None, True),
+        # Company OFF, invoice has no selling price list → not shown
+        (0, 0, None, False),
+    ],
+)
+def test_resolve_show_discount(monkeypatch, company_flag, price_list_flag, selling_price_list, expected):
+    """show = company OR price_list; a missing selling price list falls back to the Company flag."""
+    monkeypatch.setattr(frappe, "get_value", lambda *args, **kwargs: price_list_flag)
+    company_data = {"show_discount_on_tax_invoice": company_flag}
+    assert _resolve_show_discount(company_data, selling_price_list) is expected
