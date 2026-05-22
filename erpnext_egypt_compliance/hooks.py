@@ -113,6 +113,8 @@ fixtures = [
                     "Company-eta_default_branch",
                     "Company-eta_default_activity_code",
                     "Company-custom_enable_ereceipt",
+                    "Company-show_discount_on_tax_invoice",
+                    "Price List-show_discount_on_tax_invoice",
                     # "Company-eta_document_type_version",
                     # "Company-eta_company_environment",
                     "Address-building_number",
