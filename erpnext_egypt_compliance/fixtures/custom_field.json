@@ -2286,7 +2286,7 @@
   "collapsible": 0,
   "collapsible_depends_on": null,
   "columns": 0,
-  "default": 1,
+  "default": 0,
   "depends_on": null,
   "description": "Default for whether item-level discounts are shown on the ETA tax invoice. Can be overridden per Price List.",
   "docstatus": 0,
